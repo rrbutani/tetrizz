@@ -1,6 +1,6 @@
 use criterion::{criterion_group, criterion_main, Criterion};
 use tetrizz::data::*;
-use tetrizz::movegen::movegen_piece;
+use tetrizz::movegen::baseline::movegen_piece;
 
 pub fn criterion_benchmark(c: &mut Criterion) {
     let game = Game::new(None);

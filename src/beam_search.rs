@@ -4,7 +4,7 @@ use ordered_float::NotNan;
 
 use crate::data::*;
 use crate::eval::Eval;
-use crate::movegen::movegen;
+use crate::movegen::baseline::movegen;
 
 #[derive(Clone, Debug)]
 pub struct Node {

@@ -9,7 +9,7 @@ pub mod movegen;
 #[cfg(test)]
 mod tests {
     use super::data::*;
-    use super::movegen::*;
+    use super::movegen::baseline::movegen_piece;
 
     #[test]
     fn movegen() {
