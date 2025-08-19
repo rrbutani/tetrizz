@@ -1,6 +1,8 @@
 use crate::data::*;
 use std::fmt;
 
+use strum::VariantArray;
+
 const FULL_HEIGHT: u64 = (1 << 40) - 1;
 
 pub fn movegen(game: &Game, next: Piece) -> Vec<PieceLocation> {
@@ -273,9 +275,13 @@ const fn kicks(piece: Piece, from: Rotation, to: Rotation) -> [(i8, i8); 6] {
 
 #[derive(Debug, Clone)]
 pub struct CollisionMap {
+    // map of cells the piece *cannot* be placed at
     pub obstructed: [u64; 10],
+    // cells the piece can be placed at
     pub all_valid: [u64; 10],
+    // cells to explore next
     pub explored: [u64; 10],
+    // cells at which the piece would generate a spin
     pub spin_loc: [u64; 10],
 }
 
@@ -289,7 +295,16 @@ impl CollisionMap {
                     .get((x + dx) as usize)
                     .map(|c| c.0)
                     .unwrap_or(FULL_HEIGHT);
+                // mark which cells `piece` cannot be placed at
+                //
+                // for positive y offsets, shift the column down — e.g. if we
+                // have y=+1, we're only blocked by a mino at row idx 3 if we
+                // attempt to place the piece's center at row idx _2_ — placing
+                // at 3 is fine
+                //
+                // for negative y offsets, do the opposite: shift up
                 let c = match dy < 0 {
+                    // double invert so we shift in 1s (LSB) not 0s
                     true => !(!c << -dy),
                     false => c >> dy,
                 };
@@ -298,8 +313,51 @@ impl CollisionMap {
         }
 
         let max_height = board.cols.into_iter().map(Column::height).max().unwrap();
+
+        // take the highest non-empty row, add 3 to its index — the piece can
+        // *potentially* be placed at all cells at and below this row
+        //
+        // `3` because no piece has a relative block offset higher than `±2`
         let mut all_valid: [u64; 10] = [(1 << (max_height + 3)) - 1; 10];
+
+        // seed the search with all the cells *3* rows up from the highest
+        // non-empty row (note: this translates to a `+2` for the `<<`)
+        //
+        // i.e. if the highest non-empty row is the row with index 3, the row
+        // with index 6 will be where we start our search
+        //
+        // this allows for relative block offsets of up to `±2` (two rows
+        // between our start and the highest non-empty row)
         let mut explored = [1 << (max_height + 2); 10];
+
+        const _PIECE_OFFSET_MAX_DEPTH_CHECK: () = {
+            let mut i = 0;
+            while i < Piece::VARIANTS.len() {
+                let piece = Piece::VARIANTS[i];
+
+                let mut j = 0;
+                while j < Rotation::VARIANTS.len() {
+                    let rotation = Rotation::VARIANTS[j];
+
+                    let block_offsets = rotation.rotate_blocks(piece.blocks());
+                    let mut k = 0;
+                    while k < block_offsets.len() {
+                        let (_dx, dy) = block_offsets[k];
+                        if !(dy.abs() < 3) {
+                            panic!("depth offset out of bounds");
+                        }
+                        k += 1;
+                    }
+
+                    j += 1;
+                }
+
+                i += 1;
+            }
+        };
+
+        // any cell the piece is obstructed at cannot be a valid placement and
+        // should not be explored
         for x in 0..10 {
             all_valid[x] &= !obstructed[x];
             explored[x] &= !obstructed[x];
@@ -318,14 +376,15 @@ impl CollisionMap {
     fn floodfill(&mut self) -> [u64; 10] {
         let mut last = [0u64; 10];
         let mut res = self.explored;
-        while last != res {
+        while last != res { // loop until we fail to make more progress
             last = res;
-            for x in 0..10 {
+            for x in 0..10 { // for each column:
                 let mut last_col = 0u64;
-                while last_col != res[x] {
+                while last_col != res[x] { // move down (as permitted by `obstructed`) until fixed point
                     last_col = res[x];
                     res[x] |= (res[x] >> 1) & !self.obstructed[x];
                 }
+                // move left/right as permitted by `obstructed`
                 res[x] |= (res.get(x - 1).copied().unwrap_or(0)
                     | res.get(x + 1).copied().unwrap_or(0))
                     & !self.obstructed[x];
