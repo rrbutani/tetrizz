@@ -1,7 +1,9 @@
 pub mod beam_search;
 pub mod data;
 pub mod eval;
-// pub mod genetic;
+
+#[cfg(feature = "genetic")]
+pub mod genetic;
 pub mod movegen;
 
 #[cfg(test)]

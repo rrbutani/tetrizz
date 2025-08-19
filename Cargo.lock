@@ -538,6 +538,7 @@ dependencies = [
  "im",
  "ordered-float",
  "rand",
+ "rayon",
  "serde",
 ]
 
