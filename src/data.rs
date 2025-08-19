@@ -1,9 +1,9 @@
-// use std::ops::{BitAnd, BitOr};
-
 use rand::prelude::IndexedRandom;
 use serde::{Deserialize, Serialize};
+use strum::{EnumCount, VariantArray};
 
 #[derive(Serialize, Deserialize, Copy, Clone, PartialEq, Eq, Debug, Hash)]
+#[derive(VariantArray, EnumCount)]
 pub enum Piece {
     I,
     O,
@@ -15,10 +15,19 @@ pub enum Piece {
 }
 
 #[derive(Serialize, Deserialize, Debug, Hash, PartialEq, Eq, Copy, Clone)]
+#[derive(VariantArray, EnumCount)]
 pub enum Rotation {
+    /// aka 0°
+    #[doc(alias = "no-op")]
     North,
+    /// aka 90° clockwise
+    #[doc(alias = "clockwise")]
     East,
+    /// aka 180°
+    #[doc(alias = "180")]
     South,
+    /// aka 270° clockwise
+    #[doc(alias = "counterclockwise")]
     West,
 }
 
@@ -46,12 +55,37 @@ impl Column {
         64 - self.0.leading_zeros() as u8
     }
 
+    // where `lines.bit(row idx)` indicates whether a particular row's cells are
+    // all occupied (i.e. `lines.bit(r) = col0.bit(r) & ... & col9.bit(r)`)
     fn clear(&mut self, mut lines: u64) {
+        // while there are rows to remove, iterate
         while lines != 0 {
+            // handle the next row (from the bottom) to remove:
+
+            // get the set of (contiguous) rows (starting from the bottom) that
+            // are *not* to be removed
             let i = lines.trailing_zeros();
-            let mask = (1 << i) - 1;
+            let mask = (1 << i) - 1; // rows from bottom to keep
+            // note: if we're still in this while loop, there must be at least
+            // one `1` in `lines` — thus, the next bit left of this mask must be
+            // a `1` in `lines` (a row to remove)
+
+            // filter out the bit at `i + 1` (left of the mask, the row directly
+            // *above* our contiguous set of rows that aren't complete)
             self.0 = self.0 & mask | self.0 >> 1 & !mask;
+
+            // we handled row `i + 1` — remove it from `lines`
             lines &= !(1 << i);
+
+            // because we removed a row, we need to shift `lines[i+2..]` down so
+            // that is stays aligned with `self.0`
+            //
+            // technically we're trying to just splice out the bit at `i+1`,
+            // like we do for `self.0` above; i.e.
+            // `lines = lines[0..=i] : lines[i+2..]`
+            //
+            // but because `line[0..=1]` is guaranteed to be all zeros we can
+            // just right shift
             lines >>= 1;
         }
     }
@@ -71,8 +105,12 @@ pub struct PlacementInfo {
     pub lines_cleared: u32,
 }
 
+type BlockOffset = (i8, i8);
+type BlockOffsets = [BlockOffset; 4];
+
+
 impl Rotation {
-    pub const fn rotate_block(&self, (x, y): (i8, i8)) -> (i8, i8) {
+    pub const fn rotate_block(&self, (x, y): BlockOffset) -> BlockOffset {
         match self {
             Rotation::North => (x, y),
             Rotation::East => (y, -x),
@@ -81,7 +119,8 @@ impl Rotation {
         }
     }
 
-    pub const fn rotate_blocks(&self, blocks: [(i8, i8); 4]) -> [(i8, i8); 4] {
+    // rotate the offsets for a tetromino
+    pub const fn rotate_blocks(&self, blocks: BlockOffsets) -> BlockOffsets {
         [
             self.rotate_block(blocks[0]),
             self.rotate_block(blocks[1]),
@@ -119,69 +158,105 @@ impl Rotation {
 }
 
 impl Piece {
-    pub const fn blocks(&self) -> [(i8, i8); 4] {
+    // -> (x, y)
+    pub const fn blocks(&self) -> BlockOffsets {
+        //     +1|⬜️⬜️⬜️
+        //      0|⬜️⬜️⬜️
+        //     -1|⬜️⬜️⬜️
+        // y^ x> |-1 0 1
         match self {
+            // +1|🟥🟥⬜️
+            //  0|⬜️🟥🟥
+            // -1|⬜️⬜️⬜️
+            //   |-1 0 1
             Piece::Z => [(-1, 1), (0, 1), (0, 0), (1, 0)],
+            // +1|⬜️🟩🟩
+            //  0|🟩🟩⬜️
+            // -1|⬜️⬜️⬜️
+            //   |-1 0 1
             Piece::S => [(-1, 0), (0, 0), (0, 1), (1, 1)],
+            // +1|⬜️⬜️⬜️⬜️
+            //  0|🟫🟫🟫🟫
+            // -1|⬜️⬜️⬜️⬜️
+            //   |-1 0 1 2
             Piece::I => [(-1, 0), (0, 0), (1, 0), (2, 0)],
+            // +1|⬜️🟨🟨
+            //  0|⬜️🟨🟨
+            // -1|⬜️⬜️⬜️
+            //   |-1 0 1
             Piece::O => [(0, 0), (1, 0), (0, 1), (1, 1)],
+            // +1|🟦⬜️⬜️
+            //  0|🟦🟦🟦
+            // -1|⬜️⬜️⬜️
+            //   |-1 0 1
             Piece::J => [(-1, 0), (0, 0), (1, 0), (-1, 1)],
+            // +1|⬜️⬜️🟧
+            //  0|🟧🟧🟧
+            // -1|⬜️⬜️⬜️
+            //   |-1 0 1
             Piece::L => [(-1, 0), (0, 0), (1, 0), (1, 1)],
+            // +1|⬜️🟪⬜️
+            //  0|🟪🟪⬜️
+            // -1|⬜️🟪⬜️
+            //   |-1 0 1
             Piece::T => [(-1, 0), (0, 0), (1, 0), (0, 1)],
         }
     }
 }
 
-macro_rules! lutify {
-    (($e:expr) for $v:ident in [$($val:expr),*]) => {
-        [
-            $(
-                {
-                    let $v = $val;
-                    $e
-                }
-            ),*
-        ]
-    };
-}
+macro_rules! lut {
+    ($array:expr => $out_ty:ty: $v:pat => $e:expr) => {
+        {
+            const _LEN: usize = ($array).len();
+            let mut out = [const { core::mem::MaybeUninit::uninit() }; _LEN];
 
-macro_rules! piece_lut {
-    ($v:ident => $e:expr) => {
-        lutify!(($e) for $v in [Piece::I, Piece::O, Piece::T, Piece::L, Piece::J, Piece::S, Piece::Z])
-    };
-}
+            let mut i = 0;
+            let arr = $array;
+            while i < _LEN {
+                let $v = arr[i];
+                out[i] = core::mem::MaybeUninit::new($e);
 
-macro_rules! rotation_lut {
-    ($v:ident => $e:expr) => {
-        lutify!(($e) for $v in [Rotation::North, Rotation::East, Rotation::South, Rotation::West])
-    };
+                i += 1;
+            }
+
+            unsafe {
+                core::mem::transmute::<_, [$out_ty; _LEN]>(out)
+            }
+        }
+    }
 }
 
 impl PieceLocation {
+    // apply the rotation to the piece, yielding new cell positions
     pub const fn blocks(&self) -> [(i8, i8); 4] {
-        const LUT: [[[(i8, i8); 4]; 4]; 7] =
-            piece_lut!(piece => rotation_lut!(rotation => rotation.rotate_blocks(piece.blocks())));
+        // for a given piece, for a given rotation: what are the block offsets?
+        const LUT: [[BlockOffsets; Rotation::COUNT]; Piece::COUNT] = lut!(
+            Piece::VARIANTS => [BlockOffsets; Rotation::COUNT]: piece => {
+                lut!(Rotation::VARIANTS => BlockOffsets: r => {
+                    r.rotate_blocks(piece.blocks())
+                })
+            }
+        );
+
         self.translate_blocks(LUT[self.piece as usize][self.rotation as usize])
-        // self.translate_blocks(self.rotation.rotate_blocks(self.piece.blocks()))
     }
 
-    const fn translate(&self, (x, y): (i8, i8)) -> (i8, i8) {
+    const fn translate(&self, (x, y): BlockOffset) -> (i8, i8) {
         (x + self.x, y + self.y)
     }
 
-    const fn translate_blocks(&self, cells: [(i8, i8); 4]) -> [(i8, i8); 4] {
+    const fn translate_blocks(&self, [a, b, c, d]: BlockOffsets) -> [(i8, i8); 4] {
         [
-            self.translate(cells[0]),
-            self.translate(cells[1]),
-            self.translate(cells[2]),
-            self.translate(cells[3]),
+            self.translate(a),
+            self.translate(b),
+            self.translate(c),
+            self.translate(d),
         ]
     }
 }
 
 impl Board {
     pub fn place(&mut self, loc: PieceLocation) -> PlacementInfo {
-        let spin = loc.spun;
         for &(x, y) in &loc.blocks() {
             self.cols[x as usize].0 |= 1 << y;
         }
@@ -190,7 +265,7 @@ impl Board {
             false => 0,
         };
         PlacementInfo {
-            spin,
+            spin: loc.spun,
             lines_cleared: line_mask.count_ones(),
         }
     }
@@ -206,32 +281,19 @@ impl Board {
 
 impl Game {
     pub fn new(p: Option<Piece>) -> Self {
-        let mut game = Self {
+        let hold = p.unwrap_or_else(|| {
+            let mut rng = rand::rng();
+            *Piece::VARIANTS.choose(&mut rng).unwrap()
+        });
+
+        Self {
             board: Board {
                 cols: [Column(0); 10],
             },
-            hold: Piece::Z, // placeholder
+            hold,
             b2b: 0,
             b2b_deficit: 0,
-        };
-        if p.is_some() {
-            game.hold = p.unwrap();
-            return game;
         }
-        let mut rng = rand::rng();
-        game.hold = [
-            Piece::I,
-            Piece::J,
-            Piece::L,
-            Piece::O,
-            Piece::T,
-            Piece::S,
-            Piece::Z,
-        ]
-        .choose(&mut rng)
-        .copied()
-        .unwrap();
-        game
     }
 
     pub fn advance(&mut self, next: Piece, loc: PieceLocation) -> PlacementInfo {
